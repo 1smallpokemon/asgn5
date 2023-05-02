@@ -2,43 +2,31 @@
 
 ;; Define data structures for the abstract syntax tree (AST)
 (require typed/rackunit)
-(struct IdC ([id : Symbol]) #:transparent)
-(define-type FundefC (U FunC))
-(struct FunC ([name : Symbol] [args : (Listof Symbol)] [body : ExprC])#:transparent)
 
-(define-type ExprC (U NumC BinopC leq0? IdC FunAppC))
-(struct BinopC ([op : Symbol] [l : ExprC] [r : ExprC]) #:transparent)
+(define-type ExprC (U ValV ifC LamC IdC AppC))
+(define-type ValC (U NumC StringC))
 (struct NumC ([n : Real]) #:transparent)
-(struct leq0? ([test : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
-(struct FunAppC ([fun : Symbol] [args : (Listof ExprC)]) #:transparent)
+(struct StrC ([s : String]) #:transparent)
+(struct IfC ([do? : ExprC] [test : ExprC] [else? : ExprC]) #:transparent)
+(struct LamC ([args : (Listof Symbol)] [b : (ExprC)])#:transparent)
+(struct IdC ([id : Symbol]) #:transparent)
+(struct AppC ([fun : ExprC] [args : (Listof ExprC)]) #:transparent)
 
-;; hash-table for BinopC, converts binary operators to their corresponding
-;; racket operation
-(define ops
-  (hash
-   '+ +
-   '* *
-   '- -
-   '/ /))
+;; updated bad ID names for VVQS5
 
 (define badsyms
   (hash
-   'def #f
-   'leq0? #f
+   '= #f
+   'where #f
+   'if #f
    'else #f
-   'then #f
-   '= #f))
+   '=> #f))
 
 ;; ValidSymbol? checks if a symbol is valid for use in the AST
 (define (ValidSymbol? [sym : Symbol]) : Boolean
   (cond
-    [(hash-has-key? ops sym) #f]
     [(hash-has-key? badsyms sym) #f]
     [else #t]))
-
-;; parse-prog converts a list of S-expressions into a list of FundefC
-(define (parse-prog [s : Sexp]) : (Listof FundefC)
-  (map parse-fundef (cast s (Listof Sexp))))
 
 ;; top-interp interprets an S-expression as a program and returns the result
 (: top-interp (Sexp -> Real))
@@ -51,15 +39,6 @@
   (define init (NumC 0))
   (define main-body-substituted (subst 'init init (FunC-body main)))
   (interp main-body-substituted funs))
-
-;; lookup-fun finds a function definition by its name in a list of FundefC
-(define (lookup-fun (name : Symbol) (funs : (Listof FundefC))) : FundefC
-  (match funs
-    [(list) (error 'interp "VVQS: function not found ~e" name)]
-    [(cons f rest)
-     (match f
-       [(FunC fname _ _ )
-        (if (symbol=? name fname) f (lookup-fun name rest))])]))
 
 ;; main VVQS parsing function
 ;; parse converts an S-expression into an ExprC (AST)
@@ -83,23 +62,7 @@
      (FunC id (map (λ (x) (match x [(? symbol? (? ValidSymbol? a)) a])) (cast arg-list (Listof Sexp))) (parse exp))]
     [other (error 'parse-fundef "VVQS: illegal function ~e" s)]))
 
-;; interp consumes an abstract syntax tree to produce an answer
-;; in the context of a list of FundefC
-;(define (interp [exp : ExprC] [funs : (Listof FundefC)]) : Real
-;  (match exp
-;    [(NumC n) n]
-;    [(BinopC o l r)
-;     ((hash-ref ops o) (interp l funs) (interp r funs))]
-;    [(leq0? test then else) (if (<= (interp test funs) 0)
-;                                (interp then funs)
-;                                (interp else funs))]
-;    [(IdC id) (error 'interp "VVQS: unbound identifier ~e" id)]
-;    [(FunAppC fun args)
-;     (define fun-def (lookup-fun fun funs))
-;     (define args-val (map (λ ([x : ExprC]) (interp x funs)) args))
-;     (define substituted-body (subst-args (FunC-args fun-def) args-val (FunC-body fun-def)))
-;     (interp substituted-body funs)]
-;    ))
+
 (define (interp [exp : ExprC] [funs : (Listof FundefC)]) : Real
   (match exp
     [(NumC n) n]
@@ -114,30 +77,6 @@
      (define args-val (map (λ ([x : ExprC]) (interp x funs)) args))
      (define substituted-body (subst-args (FunC-args fun-def) (map parse args-val) (FunC-body fun-def)))
      (interp substituted-body funs)]))
-
-
-(define (subst (x : Symbol) (v : ExprC) (e : ExprC)) : ExprC
-  (match e
-    [(NumC _) e]
-    [(IdC id) (if (symbol=? x id) v e)]
-    [(BinopC o l r) (BinopC o (subst x v l) (subst x v r))]
-    [(leq0? test then else) (leq0? (subst x v test) (subst x v then) (subst x v else))]
-    [(FunAppC fun args) (match args
-                          [(cons f r) (FunAppC fun (cons (subst x v f) (map (λ ([arg : ExprC])
-                                                                              (subst x v arg)) r)))])]))
-
-(define (subst-args (ids : (Listof Symbol)) (vals : (Listof ExprC)) (e : ExprC)) : ExprC
-  (if (and (null? ids) (null? vals))
-      e
-      (let ([id (first ids)]
-            [v (first vals)])
-        (subst-args (rest ids) (rest vals) (subst id v e)))))
-
-
-;(define (subst-args (ids : (Listof Symbol)) (vals : (Listof Real)) (e : ExprC)) : ExprC
-;  (if (null? ids)
-;      e
-;      (subst-args (cdr ids) (cdr vals) (subst (car ids) (NumC (car vals)) e))))
 
 
 ;; Test cases for parsing
