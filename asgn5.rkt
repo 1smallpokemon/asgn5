@@ -120,8 +120,6 @@
             (error 'interp (format "VVQS: Wrong number of arguments for primitive ~a" name)))]
        [else (error 'interp "VVQS: Attempted to apply non-function value")])]))
 
-
-
 ;; Function to extend the environment with a list of arguments and their values
 (define (extend-env [env : Env] [arg-names : (Listof Symbol)] [args-val : (Listof ValV)]) : Env
   (append env (map (λ ([name : Symbol] [val : ValV]) (bind name val)) arg-names args-val)))
@@ -184,6 +182,8 @@
     [(BoolV b) (if b "true" "false")]
     [else (error (format "VVQS: Cannot serialize value ~a" val))]))
 
+
+;;-------------------------------TEST CASES-----------------------------------------
 ;; parser tests
 (define concreteLam '({x y} => {+ 3 {+ x y}}))
 (check-equal? (parse concreteLam)
@@ -203,6 +203,8 @@
 ;; parser errors
 (check-exn #rx"expression" (λ () (parse '(if 4))))
 (check-exn #rx"Duplicate" (λ () (parse '({x x} => {+ x x}))))
+(check-exn #rx"Duplicate" (λ () (parse '({+ yer yump} where {[yer := 4] [yer := 6]}))))
+
 
 ;; interp tests
 (define lamApp '(({x y} => {+ 3 {- x y}}) 1 2))
@@ -213,6 +215,12 @@
 ;; interp errors
 (check-exn #rx"zero" (λ () (top-interp '(/ 5 (* 5 0)))))
 (check-exn #rx"boolean" (λ () (top-interp '(1 if 2 else 3))))
+(check-exn #rx"arguments" (λ () (top-interp '{{{x y} => {+ x 1}} 1 2 3})))
+(check-exn #rx"primitive" (λ () (top-interp '(+ 1 2 3))))
+(check-exn #rx"not found" (λ () (top-interp '((+ x y) 1 2 3))))
+(check-exn #rx"non-function" (λ () (top-interp '(3))))
+
+
 (check-exn #rx"lookup" (λ () (top-interp '({+ x y} where {[x := 5]}))))
 
 ;; Test cases for NumC
@@ -260,3 +268,4 @@
   (lambda () (top-interp '((x y) => (+ x y 2) 3))))
 (check-exn exn:fail?
   (lambda () (top-interp '((+ x y) where ((x := 2) (y := 3) (x := 4))))))
+
