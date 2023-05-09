@@ -64,7 +64,7 @@
           (bind 'equal? (PrimV 'equal? 2))
           (bind 'true (BoolV #t))
           (bind 'false (BoolV #f))
-          (bind 'error (PrimV 'error 2))))
+          (bind 'error (PrimV 'error 1))))
   (serialize (interp (parse prog-sexp) top-env)))
 
 ;; main VVQS parsing function
@@ -92,6 +92,7 @@
        [(cons f r) (AppC (parse f) (map parse r))])]
     [else (error 'parse "VVQS: Invalid expression")]))
 
+;;updated interp function to handle VVQS5, supports enviorments
 (define (interp [expr : ExprC] [env : Env]) : ValV
   (match expr
     [(NumC n) (NumV n)]
@@ -111,7 +112,8 @@
      (match func-val
        [(CloV params body closure-env)
         (if (= (length params) (length arg-values))
-            (let ([extended-env (append (map (λ (param arg) (bind (cast param Symbol) (cast arg ValV))) params arg-values) closure-env)])
+            (let ([extended-env (append (map (λ (param arg) (bind (cast param Symbol)
+                                                                  (cast arg ValV))) params arg-values) closure-env)])
               (interp body extended-env))
             (error 'interp (format "VVQS: Wrong number of arguments in application")))]
        [(PrimV name arity)
@@ -120,45 +122,40 @@
             (error 'interp (format "VVQS: Wrong number of arguments for primitive ~a" name)))]
        [else (error 'interp "VVQS: Attempted to apply non-function value")])]))
 
-;; Function to extend the environment with a list of arguments and their values
-(define (extend-env [env : Env] [arg-names : (Listof Symbol)] [args-val : (Listof ValV)]) : Env
-  (append env (map (λ ([name : Symbol] [val : ValV]) (bind name val)) arg-names args-val)))
-
 ;; Apply a primitive operation based on its name
 (: apply-prim (PrimV (Listof ValV) Env -> ValV))
 (define (apply-prim prim-val args env)
   (match prim-val
     [(PrimV name arity)
      (match name
-           ['+
-            (match (list (first args) (second args))
-              [(list (NumV a) (NumV b)) (NumV (+ a b))]
-              [else (error "VVQS: Argument must be real")])]
-           ['-
-            (match (list (first args) (second args))
-              [(list (NumV a) (NumV b)) (NumV (- a b))]
-              [else (error "VVQS: Argument must be real")])]
-           ['*
-            (match (list (first args) (second args))
-              [(list (NumV a) (NumV b)) (NumV (* a b))]
-              [else (error "VVQS: Argument must be real")])]
-           ['/
-            (match (list (first args) (second args))
-              [(list (NumV a) (NumV b))
-               (if (zero? b)
-                   (error "VVQS: Division by zero")
-                   (NumV (/ a b)))]
-              [else (error "VVQS: Argument must be real")])]
-           ['<=
-            (match (list (first args) (second args))
-              [(list (NumV a) (NumV b)) (BoolV (<= a b))]
-              [else (error "VVQS: Argument must be real")])]
-           ['equal?
-            (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) args)
-                (BoolV (equal? (serialize (first args)) (serialize (second args))))
-                (BoolV #f))]
-           [else (error (format "VVQS: Unknown primitive operation ~a" name))])]
-    [else (error (format "VVQS: Unknown identifier ~a" (PrimV-name prim-val)))]))
+       ['+
+        (match (list (first args) (second args))
+          [(list (NumV a) (NumV b)) (NumV (+ a b))]
+          [else (error "VVQS: Argument must be real")])]
+       ['-
+        (match (list (first args) (second args))
+          [(list (NumV a) (NumV b)) (NumV (- a b))]
+          [else (error "VVQS: Argument must be real")])]
+       ['*
+        (match (list (first args) (second args))
+          [(list (NumV a) (NumV b)) (NumV (* a b))]
+          [else (error "VVQS: Argument must be real")])]
+       ['/
+        (match (list (first args) (second args))
+          [(list (NumV a) (NumV b))
+           (if (zero? b)
+               (error "VVQS: Division by zero")
+               (NumV (/ a b)))]
+          [else (error "VVQS: Argument must be real")])]
+       ['<=
+        (match (list (first args) (second args))
+          [(list (NumV a) (NumV b)) (BoolV (<= a b))]
+          [else (error "VVQS: Argument must be real")])]
+       ['equal?
+        (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) args)
+            (BoolV (equal? (serialize (first args)) (serialize (second args))))
+            (BoolV #f))]
+       ['error (error (format "user-error ~a" (serialize (first args))))])]))
 
 
 (: serialize (ValV -> String))
@@ -273,4 +270,13 @@
 (check-exn #rx"real" (λ () (top-interp '(<= true 2))))
 ;(check-exn #rx"")
 
+(define test-equal-closure
+   '{equal? {{x} => {+ x 1}} {{y} => {+ y 1}}})
 
+(check-equal? (top-interp test-equal-closure) "false")
+
+(define test-wrong-args
+   '{+ 5 10 15})
+
+(check-exn #rx"VVQS: Wrong number of arguments for +" (λ () (top-interp test-wrong-args)))
+(check-exn #rx"user-error" (λ () (top-interp '(error "hi"))))
