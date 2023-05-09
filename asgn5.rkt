@@ -133,25 +133,6 @@
       (error (format "user-error: Expected a real number, got ~a" x))))
 
 ;; Apply a primitive operation based on its name
-;(: apply-prim (PrimV (Listof ValV) Env -> ValV))
-;(define (apply-prim prim-val args env)
-;  (match prim-val
-;    [(PrimV name arity)
-;     (if (= arity (length args))
-;         (let ([args (map (lambda (arg) (if (real? arg) arg (error "VVQS: Argument must be real"))) args)])
-;           (match name
-;             ['+ (NumV (apply + args))]
-;             ['- (NumV (apply - args))]
-;             ['* (NumV (apply * args))]
-;             ['/ (NumV (apply / args))]
-;             ['<= (BoolV (apply <= args))]
-;             ['equal?
-;              (let ([evaluated-args (map (λ (arg) (interp arg env)) args)])
-;                (BoolV (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) evaluated-args)
-;                           (apply equal? (map serialize (cast evaluated-args (Listof ValV))))
-;                           #f)))]))
-;         (error (format "VVQS: Wrong number of arguments for ~a" name)))]
-;    [else (error (format "VVQS: Unknown identifier ~a" (PrimV-name prim-val)))]))
 (: apply-prim (PrimV (Listof ValV) Env -> ValV))
 (define (apply-prim prim-val args env)
   (match prim-val
@@ -159,22 +140,32 @@
      (if (= arity (length args))
          (match name
            ['+
-            (NumV (apply + (map (λ (arg) (if (NumV? arg) (NumV-val arg) (error "VVQS: Argument must be real"))) args)))]
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (+ a b))]
+              [else (error "VVQS: Argument must be real")])]
            ['-
-            (NumV (apply - (map (λ (arg) (if (NumV? arg) (NumV-val arg) (error "VVQS: Argument must be real"))) args)))]
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (- a b))]
+              [else (error "VVQS: Argument must be real")])]
            ['*
-            (NumV (apply * (map (λ (arg) (if (NumV? arg) (NumV-val arg) (error "VVQS: Argument must be real"))) args)))]
-           ['/ (define checked-args (map (λ (arg) (if (NumV? arg) (NumV-val arg) (error "VVQS: Argument must be real"))) args))
-            (if (zero? (cadr checked-args))
-                (error "VVQS: Division by zero")
-                (NumV (apply / checked-args)))]
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (* a b))]
+              [else (error "VVQS: Argument must be real")])]
+           ['/
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b))
+               (if (zero? b)
+                   (error "VVQS: Division by zero")
+                   (NumV (/ a b)))]
+              [else (error "VVQS: Argument must be real")])]
            ['<=
-            (BoolV (apply <= (map (λ (arg) (if (NumV? arg) (NumV-val arg) (error "VVQS: Argument must be real"))) args)))]
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (BoolV (<= a b))]
+              [else (error "VVQS: Argument must be real")])]
            ['equal?
-            (define evaluated-args (map (λ (arg) (interp (cast arg ExprC) env)) args))
-            (BoolV (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) evaluated-args)
-                       (apply equal? (map serialize evaluated-args))
-                       #f))]
+            (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) args)
+                (BoolV (equal? (serialize (first args)) (serialize (second args))))
+                (BoolV #f))]
            [else (error (format "VVQS: Unknown primitive operation ~a" name))])
          (error (format "VVQS: Wrong number of arguments for ~a" name)))]
     [else (error (format "VVQS: Unknown identifier ~a" (PrimV-name prim-val)))]))
