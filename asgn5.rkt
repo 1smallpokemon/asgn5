@@ -124,20 +124,12 @@
 (define (extend-env [env : Env] [arg-names : (Listof Symbol)] [args-val : (Listof ValV)]) : Env
   (append env (map (λ ([name : Symbol] [val : ValV]) (bind name val)) arg-names args-val)))
 
-;; Function to check if the argument is a real number
-(: check-real (Real -> Real))
-(define (check-real x)
-  (if (real? x)
-      x
-      (error (format "user-error: Expected a real number, got ~a" x))))
-
 ;; Apply a primitive operation based on its name
 (: apply-prim (PrimV (Listof ValV) Env -> ValV))
 (define (apply-prim prim-val args env)
   (match prim-val
     [(PrimV name arity)
-     (if (= arity (length args))
-         (match name
+     (match name
            ['+
             (match (list (first args) (second args))
               [(list (NumV a) (NumV b)) (NumV (+ a b))]
@@ -165,8 +157,7 @@
             (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) args)
                 (BoolV (equal? (serialize (first args)) (serialize (second args))))
                 (BoolV #f))]
-           [else (error (format "VVQS: Unknown primitive operation ~a" name))])
-         (error (format "VVQS: Wrong number of arguments for ~a" name)))]
+           [else (error (format "VVQS: Unknown primitive operation ~a" name))])]
     [else (error (format "VVQS: Unknown identifier ~a" (PrimV-name prim-val)))]))
 
 
@@ -174,13 +165,14 @@
 (define (serialize val)
   (match val
     [(CloV params body env)
-     (format "<closure: params: ~a, body: ~a>" params body)]
+     "#<procedure>"
+     #;(format "<closure: params: ~a, body: ~a>" params body)] 
     [(PrimV name arity)
-     (format "<primitive: ~a, arity: ~a>" name arity)]
+     "#<primop>" 
+     #;(format "<primitive: ~a, arity: ~a>" name arity)] 
     [(StrV s) s]
     [(NumV n) (number->string n)]
-    [(BoolV b) (if b "true" "false")]
-    [else (error (format "VVQS: Cannot serialize value ~a" val))]))
+    [(BoolV b) (if b "true" "false")]))
 
 
 ;;-------------------------------TEST CASES-----------------------------------------
@@ -259,6 +251,11 @@
 
 (check-equal? (top-interp '((((f) => ((x y) => (f x y))) ((a b) => (+ a b))) 1 2)) "3")
 
+;; serializing PrimV and CloV
+(check-equal? (serialize (PrimV '+ 4)) "#<primop>")
+(check-equal? (serialize (CloV '(a b c) (IdC 'x) '())) "#<procedure>")
+;(struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env])#:transparent)
+
 ;; Error cases
 (check-exn exn:fail?
   (lambda () (top-interp '(+ 2))))
@@ -268,4 +265,12 @@
   (lambda () (top-interp '((x y) => (+ x y 2) 3))))
 (check-exn exn:fail?
   (lambda () (top-interp '((+ x y) where ((x := 2) (y := 3) (x := 4))))))
+
+(check-exn #rx"real" (λ () (top-interp '(+ true (- false (* "fail" (/ 4 "zero")))))))
+(check-exn #rx"real" (λ () (top-interp '(+ true (- false (* "fail" 4))))))
+(check-exn #rx"real" (λ () (top-interp '(+ true (- false 3)))))
+(check-exn #rx"real" (λ () (top-interp '(+ true 2))))
+(check-exn #rx"real" (λ () (top-interp '(<= true 2))))
+;(check-exn #rx"")
+
 
