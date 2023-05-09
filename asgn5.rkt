@@ -92,7 +92,6 @@
        [(cons f r) (AppC (parse f) (map parse r))])]
     [else (error 'parse "VVQS: Invalid expression")]))
 
-
 (define (interp [expr : ExprC] [env : Env]) : ValV
   (match expr
     [(NumC n) (NumV n)]
@@ -108,18 +107,20 @@
      (lookup id env)]
     [(AppC fun args)
      (define func-val (interp fun env))
+     (define arg-values (map (λ (arg) (interp (cast arg ExprC) env)) args))
      (match func-val
        [(CloV params body closure-env)
-        (if (= (length params) (length args))
-            (let ([extended-env (append (map (λ (param arg) (bind (cast param Symbol) (interp (cast arg ExprC) env))) params args) closure-env)])
+        (if (= (length params) (length arg-values))
+            (let ([extended-env (append (map (λ (param arg) (bind (cast param Symbol) (cast arg ValV))) params arg-values) closure-env)])
               (interp body extended-env))
             (error 'interp (format "VVQS: Wrong number of arguments in application")))]
        [(PrimV name arity)
-        (define arg-values (map (λ (arg) (interp (cast arg ExprC) env)) args))
         (if (= arity (length arg-values))
             (apply-prim func-val arg-values env)
             (error 'interp (format "VVQS: Wrong number of arguments for primitive ~a" name)))]
        [else (error 'interp "VVQS: Attempted to apply non-function value")])]))
+
+
 
 ;; Function to extend the environment with a list of arguments and their values
 (define (extend-env [env : Env] [arg-names : (Listof Symbol)] [args-val : (Listof ValV)]) : Env
@@ -182,3 +183,80 @@
     [(NumV n) (number->string n)]
     [(BoolV b) (if b "true" "false")]
     [else (error (format "VVQS: Cannot serialize value ~a" val))]))
+
+;; parser tests
+(define concreteLam '({x y} => {+ 3 {+ x y}}))
+(check-equal? (parse concreteLam)
+              (LamC (list 'x 'y)
+                    (AppC (IdC '+) (list (NumC 3)
+                                         (AppC (IdC '+)
+                                               (list (IdC 'x) (IdC 'y)))))))
+
+(define ifTest '(("nice" if {<= x 4} else "lame") where {[x := 5]}))
+(check-equal? (parse ifTest)
+              (AppC (LamC '(x)
+                          (IfC (StrC "nice")
+                               (AppC (IdC '<=) (list (IdC 'x) (NumC 4)))
+                               (StrC "lame")))
+                    (list (NumC 5))))
+
+;; parser errors
+(check-exn #rx"expression" (λ () (parse '(if 4))))
+(check-exn #rx"Duplicate" (λ () (parse '({x x} => {+ x x}))))
+
+;; interp tests
+(define lamApp '(({x y} => {+ 3 {- x y}}) 1 2))
+(check-equal? (top-interp lamApp) "2")
+(check-equal? (top-interp ifTest) "lame")
+(check-equal? (top-interp '(69 if {<= 5 7} else 96)) "69")
+
+;; interp errors
+(check-exn #rx"zero" (λ () (top-interp '(/ 5 (* 5 0)))))
+(check-exn #rx"boolean" (λ () (top-interp '(1 if 2 else 3))))
+(check-exn #rx"lookup" (λ () (top-interp '({+ x y} where {[x := 5]}))))
+
+;; Test cases for NumC
+(check-equal? (top-interp '42) "42")
+
+;; Test cases for StrC
+(check-equal? (top-interp "hello") "hello")
+
+;; Test cases for IfC
+(check-equal? (top-interp '(1 if true else 2)) "1")
+(check-equal? (top-interp '(1 if false else 2)) "2")
+
+;; Test cases for LamC and AppC
+(check-equal? (top-interp '(((x y) => (+ x y)) 2 3)) "5")
+(check-equal? (top-interp '(((x) => (+ x 1)) 4)) "5")
+
+;; Test cases for IdC
+(check-equal? (top-interp 'true) "true")
+(check-equal? (top-interp 'false) "false")
+;
+;; Test cases for primitive operations
+(check-equal? (top-interp '(+ 2 3)) "5")
+(check-equal? (top-interp '(- 7 3)) "4")
+(check-equal? (top-interp '(* 4 3)) "12")
+(check-equal? (top-interp '(/ 8 2)) "4")
+(check-equal? (top-interp '(<= 2 3)) "true")
+(check-equal? (top-interp '(<= 3 3)) "true")
+(check-equal? (top-interp '(<= 4 3)) "false")
+(check-equal? (top-interp '(equal? "hello" "hello")) "true")
+(check-equal? (top-interp '(equal? "hello" "world")) "false")
+
+;; Test cases for where
+(check-equal? (top-interp '((+ x y) where ((x := 2) (y := 3)))) "5")
+(check-equal? (top-interp '((+ x y) where ((x := 4) (y := (* 4 2))))) "12")
+
+
+(check-equal? (top-interp '((((f) => ((x y) => (f x y))) ((a b) => (+ a b))) 1 2)) "3")
+
+;; Error cases
+(check-exn exn:fail?
+  (lambda () (top-interp '(+ 2))))
+(check-exn exn:fail?
+  (lambda () (top-interp '(+ 2 3 4))))
+(check-exn exn:fail?
+  (lambda () (top-interp '((x y) => (+ x y 2) 3))))
+(check-exn exn:fail?
+  (lambda () (top-interp '((+ x y) where ((x := 2) (y := 3) (x := 4))))))
