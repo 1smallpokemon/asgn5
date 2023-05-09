@@ -2,227 +2,270 @@
 
 ;; Define data structures for the abstract syntax tree (AST)
 (require typed/rackunit)
-(struct IdC ([id : Symbol]) #:transparent)
-(define-type FundefC (U FunC))
-(struct FunC ([name : Symbol] [args : (Listof Symbol)] [body : ExprC])#:transparent)
 
-(define-type ExprC (U NumC BinopC leq0? IdC FunAppC))
-(struct BinopC ([op : Symbol] [l : ExprC] [r : ExprC]) #:transparent)
+(define-type ExprC (U ValC IfC LamC IdC AppC))
+(define-type ValC (U NumC StrC))
 (struct NumC ([n : Real]) #:transparent)
-(struct leq0? ([test : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
-(struct FunAppC ([fun : Symbol] [args : (Listof ExprC)]) #:transparent)
+(struct StrC ([s : String]) #:transparent)
+(struct IfC ([do? : ExprC] [test : ExprC] [else? : ExprC]) #:transparent)
+(struct LamC ([args : (Listof Symbol)] [body : ExprC])#:transparent)
+(struct IdC ([id : Symbol]) #:transparent)
+(struct AppC ([fun : ExprC] [args : (Listof ExprC)]) #:transparent)
 
-;; hash-table for BinopC, converts binary operators to their corresponding
-;; racket operation
-(define ops
-  (hash
-   '+ +
-   '* *
-   '- -
-   '/ /))
 
+;;Value types
+(define-type ValV (U CloV PrimV StrV NumV BoolV))
+(struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env])#:transparent)
+(struct PrimV ([name : Symbol] [arity : Natural])#:transparent)
+(struct StrV ([val : String])#:transparent)
+(struct NumV ([val : Real])#:transparent)
+(struct BoolV ([val : Boolean])#:transparent)
+
+;; Define the environment data type
+(define-type Env (Listof bind))
+(struct bind[(name : Symbol) (val : ValV)] #:transparent)
+(define mt-env empty)
+
+;; updated bad ID names for VVQS5
 (define badsyms
   (hash
-   'def #f
-   'leq0? #f
+   '= #f
+   'where #f
+   'if #f
    'else #f
-   'then #f
-   '= #f))
+   '=> #f))
+
 
 ;; ValidSymbol? checks if a symbol is valid for use in the AST
 (define (ValidSymbol? [sym : Symbol]) : Boolean
   (cond
-    [(hash-has-key? ops sym) #f]
     [(hash-has-key? badsyms sym) #f]
     [else #t]))
 
-;; parse-prog converts a list of S-expressions into a list of FundefC
-(define (parse-prog [s : Sexp]) : (Listof FundefC)
-  (map parse-fundef (cast s (Listof Sexp))))
+;; Define the lookup function for environments
+(define (lookup [for : Symbol] [env : Env]) : ValV
+  (match env
+    [(list) (error 'lookup "VVQS: name not found")]
+    [(cons (bind name val) rest-env)
+     (if (symbol=? for name)
+         val
+         (lookup for rest-env))]))
 
-;; top-interp interprets an S-expression as a program and returns the result
-(: top-interp (Sexp -> Real))
-(define (top-interp fun-sexps)
-  (interp-fns (parse-prog fun-sexps)))
 
-;; interp-fns interprets a list of FundefC and returns the result of the main function
-(define (interp-fns [funs : (Listof FundefC)]) : Real
-  (define main (lookup-fun 'main funs))
-  (define init (NumC 0))
-  (define main-body-substituted (subst 'init init (FunC-body main)))
-  (interp main-body-substituted funs))
-
-;; lookup-fun finds a function definition by its name in a list of FundefC
-(define (lookup-fun (name : Symbol) (funs : (Listof FundefC))) : FundefC
-  (match funs
-    [(list) (error 'interp "VVQS: function not found ~e" name)]
-    [(cons f rest)
-     (match f
-       [(FunC fname _ _ )
-        (if (symbol=? name fname) f (lookup-fun name rest))])]))
+;; Implement the top-interp function
+(define (top-interp [prog-sexp : Sexp])
+  ;; Define the top-level environment
+  (define top-env
+    (list (bind '+ (PrimV '+ 2))
+          (bind '- (PrimV '- 2))
+          (bind '* (PrimV '* 2))
+          (bind '/ (PrimV '/ 2))
+          (bind '<= (PrimV '<= 2))
+          (bind 'equal? (PrimV 'equal? 2))
+          (bind 'true (BoolV #t))
+          (bind 'false (BoolV #f))
+          (bind 'error (PrimV 'error 2))))
+  (serialize (interp (parse prog-sexp) top-env)))
 
 ;; main VVQS parsing function
 ;; parse converts an S-expression into an ExprC (AST)
-(define (parse [expr : Sexp]) : ExprC
-  (match expr
+;; Modify the parse function according to the new ExprC definition
+;; Parse an S-expression into an ExprC
+(define (parse [sexp : Sexp]) : ExprC
+  (match sexp
     [(? real? n) (NumC n)]
-    [(list (? symbol? s) l r) (if (hash-has-key? ops s)
-                                  (BinopC s (parse l) (parse r))
-                                  (error 'parse "VVQS: illegal operator ~e" s))]
-    [(list 'leq0? test 'then then 'else else)
-     (leq0? (parse test) (parse then) (parse else))]
-    [(? symbol? (? ValidSymbol? id)) (IdC id)]
-    [(cons (? symbol? (? ValidSymbol? f)) r)
-     (FunAppC f (map parse (cast r (Listof Sexp))))]
-    [other (error 'parse "VVQS: illegal expression: ~e" other)]))
+    [(? symbol? (? ValidSymbol? s)) (IdC s)]
+    [(? string? s) (StrC s)]
+    [(list body 'if test 'else else)
+     (IfC (parse body) (parse test) (parse else))]
+    [(list body 'where (list (list (? symbol? (? ValidSymbol? bindings)) ':= exp) ...))
+     (if (= (length bindings) (length (remove-duplicates bindings)))
+           (AppC (LamC (cast bindings (Listof Symbol)) (parse body))
+                 (map parse (cast exp (Listof Sexp))))
+           (error 'parse "VVQS: Duplicate parameter names in function definition"))]
+    [(list (list (? symbol? (? ValidSymbol? args)) ...) '=> body)
+       (if (= (length args) (length (remove-duplicates args)))
+           (LamC (cast args (Listof Symbol)) (parse body))
+           (error 'parse "VVQS: Duplicate parameter names in function definition"))]
+    [(list e ...)
+     (match e
+       [(cons f r) (AppC (parse f) (map parse r))])]
+    [else (error 'parse "VVQS: Invalid expression")]))
 
-;; parse-fundef converts an S-expression into a FundefC (function definition)
-(define (parse-fundef [s : Sexp]) : FundefC
-  (match s
-    [(list 'def (cons (? symbol? (? ValidSymbol? id)) arg-list) '= exp)
-     (FunC id (map (λ (x) (match x [(? symbol? (? ValidSymbol? a)) a])) (cast arg-list (Listof Sexp))) (parse exp))]
-    [other (error 'parse-fundef "VVQS: illegal function ~e" s)]))
+(define (interp [expr : ExprC] [env : Env]) : ValV
+  (match expr
+    [(NumC n) (NumV n)]
+    [(StrC s) (StrV s)]
+    [(IfC do? test else?)
+     (define test-result (interp test env))
+     (match test-result
+       [(BoolV #t) (interp do? env)]
+       [(BoolV #f) (interp else? env)]
+       [else (error 'interp "VVQS: Test expression in if must return a boolean")])]
+    [(LamC args body) (CloV args body env)]
+    [(IdC id)
+     (lookup id env)]
+    [(AppC fun args)
+     (define func-val (interp fun env))
+     (define arg-values (map (λ (arg) (interp (cast arg ExprC) env)) args))
+     (match func-val
+       [(CloV params body closure-env)
+        (if (= (length params) (length arg-values))
+            (let ([extended-env (append (map (λ (param arg) (bind (cast param Symbol) (cast arg ValV))) params arg-values) closure-env)])
+              (interp body extended-env))
+            (error 'interp (format "VVQS: Wrong number of arguments in application")))]
+       [(PrimV name arity)
+        (if (= arity (length arg-values))
+            (apply-prim func-val arg-values env)
+            (error 'interp (format "VVQS: Wrong number of arguments for primitive ~a" name)))]
+       [else (error 'interp "VVQS: Attempted to apply non-function value")])]))
 
-;; interp consumes an abstract syntax tree to produce an answer
-;; in the context of a list of FundefC
-;(define (interp [exp : ExprC] [funs : (Listof FundefC)]) : Real
-;  (match exp
-;    [(NumC n) n]
-;    [(BinopC o l r)
-;     ((hash-ref ops o) (interp l funs) (interp r funs))]
-;    [(leq0? test then else) (if (<= (interp test funs) 0)
-;                                (interp then funs)
-;                                (interp else funs))]
-;    [(IdC id) (error 'interp "VVQS: unbound identifier ~e" id)]
-;    [(FunAppC fun args)
-;     (define fun-def (lookup-fun fun funs))
-;     (define args-val (map (λ ([x : ExprC]) (interp x funs)) args))
-;     (define substituted-body (subst-args (FunC-args fun-def) args-val (FunC-body fun-def)))
-;     (interp substituted-body funs)]
-;    ))
-(define (interp [exp : ExprC] [funs : (Listof FundefC)]) : Real
-  (match exp
-    [(NumC n) n]
-    [(BinopC o l r)
-     ((hash-ref ops o) (interp l funs) (interp r funs))]
-    [(leq0? test then else) (if (<= (interp test funs) 0)
-                                 (interp then funs)
-                                 (interp else funs))]
-    [(IdC id) (error 'interp "VVQS: unbound identifier ~e" id)]
-    [(FunAppC fun args)
-     (define fun-def (lookup-fun fun funs))
-     (define args-val (map (λ ([x : ExprC]) (interp x funs)) args))
-     (define substituted-body (subst-args (FunC-args fun-def) (map parse args-val) (FunC-body fun-def)))
-     (interp substituted-body funs)]))
+;; Function to extend the environment with a list of arguments and their values
+(define (extend-env [env : Env] [arg-names : (Listof Symbol)] [args-val : (Listof ValV)]) : Env
+  (append env (map (λ ([name : Symbol] [val : ValV]) (bind name val)) arg-names args-val)))
+
+;; Function to check if the argument is a real number
+(: check-real (Real -> Real))
+(define (check-real x)
+  (if (real? x)
+      x
+      (error (format "user-error: Expected a real number, got ~a" x))))
+
+;; Apply a primitive operation based on its name
+(: apply-prim (PrimV (Listof ValV) Env -> ValV))
+(define (apply-prim prim-val args env)
+  (match prim-val
+    [(PrimV name arity)
+     (if (= arity (length args))
+         (match name
+           ['+
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (+ a b))]
+              [else (error "VVQS: Argument must be real")])]
+           ['-
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (- a b))]
+              [else (error "VVQS: Argument must be real")])]
+           ['*
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (NumV (* a b))]
+              [else (error "VVQS: Argument must be real")])]
+           ['/
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b))
+               (if (zero? b)
+                   (error "VVQS: Division by zero")
+                   (NumV (/ a b)))]
+              [else (error "VVQS: Argument must be real")])]
+           ['<=
+            (match (list (first args) (second args))
+              [(list (NumV a) (NumV b)) (BoolV (<= a b))]
+              [else (error "VVQS: Argument must be real")])]
+           ['equal?
+            (if (andmap (lambda (x) (not (or (CloV? x) (PrimV? x)))) args)
+                (BoolV (equal? (serialize (first args)) (serialize (second args))))
+                (BoolV #f))]
+           [else (error (format "VVQS: Unknown primitive operation ~a" name))])
+         (error (format "VVQS: Wrong number of arguments for ~a" name)))]
+    [else (error (format "VVQS: Unknown identifier ~a" (PrimV-name prim-val)))]))
 
 
-(define (subst (x : Symbol) (v : ExprC) (e : ExprC)) : ExprC
-  (match e
-    [(NumC _) e]
-    [(IdC id) (if (symbol=? x id) v e)]
-    [(BinopC o l r) (BinopC o (subst x v l) (subst x v r))]
-    [(leq0? test then else) (leq0? (subst x v test) (subst x v then) (subst x v else))]
-    [(FunAppC fun args) (match args
-                          [(cons f r) (FunAppC fun (cons (subst x v f) (map (λ ([arg : ExprC])
-                                                                              (subst x v arg)) r)))])]))
-
-(define (subst-args (ids : (Listof Symbol)) (vals : (Listof ExprC)) (e : ExprC)) : ExprC
-  (if (and (null? ids) (null? vals))
-      e
-      (let ([id (first ids)]
-            [v (first vals)])
-        (subst-args (rest ids) (rest vals) (subst id v e)))))
+(: serialize (ValV -> String))
+(define (serialize val)
+  (match val
+    [(CloV params body env)
+     (format "<closure: params: ~a, body: ~a>" params body)]
+    [(PrimV name arity)
+     (format "<primitive: ~a, arity: ~a>" name arity)]
+    [(StrV s) s]
+    [(NumV n) (number->string n)]
+    [(BoolV b) (if b "true" "false")]
+    [else (error (format "VVQS: Cannot serialize value ~a" val))]))
 
 
-;(define (subst-args (ids : (Listof Symbol)) (vals : (Listof Real)) (e : ExprC)) : ExprC
-;  (if (null? ids)
-;      e
-;      (subst-args (cdr ids) (cdr vals) (subst (car ids) (NumC (car vals)) e))))
+;;-------------------------------TEST CASES-----------------------------------------
+;; parser tests
+(define concreteLam '({x y} => {+ 3 {+ x y}}))
+(check-equal? (parse concreteLam)
+              (LamC (list 'x 'y)
+                    (AppC (IdC '+) (list (NumC 3)
+                                         (AppC (IdC '+)
+                                               (list (IdC 'x) (IdC 'y)))))))
+
+(define ifTest '(("nice" if {<= x 4} else "lame") where {[x := 5]}))
+(check-equal? (parse ifTest)
+              (AppC (LamC '(x)
+                          (IfC (StrC "nice")
+                               (AppC (IdC '<=) (list (IdC 'x) (NumC 4)))
+                               (StrC "lame")))
+                    (list (NumC 5))))
+
+;; parser errors
+(check-exn #rx"expression" (λ () (parse '(if 4))))
+(check-exn #rx"Duplicate" (λ () (parse '({x x} => {+ x x}))))
+(check-exn #rx"Duplicate" (λ () (parse '({+ yer yump} where {[yer := 4] [yer := 6]}))))
 
 
-;; Test cases for parsing
-(define a1 (BinopC '+ (NumC 1) (NumC 2)))
-(define a2 (BinopC '+ (NumC 3) a1))
-(define a3 (BinopC '* a1 a2))
-(define sub (BinopC '- (NumC 3) (NumC 2)))
-(define div (BinopC '/ (NumC 4) (NumC 2)))
-(define leq0-1 (leq0? (NumC 1) a1 a2))
-(define leq0-2 (leq0? (NumC -1) a1 a2))
-(check-equal? (parse '(+ 1 2)) a1)
-(check-equal? (parse '(+ 3 (+ 1 2))) a2)
-(check-equal? (parse '(* (+ 1 2) (+ 3 (+ 1 2)))) a3)
-(check-equal? (parse '(* 3 (- 1 2))) (BinopC '* (NumC 3) (BinopC '- (NumC 1) (NumC 2))))
-(check-equal? (parse '(- 3 2)) sub)
-(check-equal? (parse '(/ 4 2)) div)
-(check-exn #rx"expression" (lambda () (parse '{+ 4})))
-(check-exn #rx"operator" (lambda () (parse '{& 4 5})))
-(check-exn #rx"VVQS: illegal expression" (lambda () (parse 'def)))
-(check-equal? (parse '(leq0? 1 then (+ 1 2) else (+ 3 (+ 1 2)))) leq0-1)
-(check-equal? (parse '(leq0? 1 then 2 else 3)) (leq0? (NumC 1) (NumC 2) (NumC 3)))
-(check-equal? (parse 'x) (IdC 'x))
-(check-equal? (parse '(f 5)) (FunAppC 'f (cons (NumC 5) '())))
+;; interp tests
+(define lamApp '(({x y} => {+ 3 {- x y}}) 1 2))
+(check-equal? (top-interp lamApp) "2")
+(check-equal? (top-interp ifTest) "lame")
+(check-equal? (top-interp '(69 if {<= 5 7} else 96)) "69")
 
-;; Test cases for function parsing
-(check-equal? (parse-fundef '{def {add x} = {+ x 1}}) (FunC 'add '(x) (BinopC '+ (IdC 'x) (NumC 1))))
-(check-equal? (parse-fundef '{def {mul x} = {* x 2}}) (FunC 'mul '(x) (BinopC '* (IdC 'x) (NumC 2))))
-(check-exn #rx"illegal function" (lambda () (parse-fundef '(def (def x) = (+ x 1)))))
+;; interp errors
+(check-exn #rx"zero" (λ () (top-interp '(/ 5 (* 5 0)))))
+(check-exn #rx"boolean" (λ () (top-interp '(1 if 2 else 3))))
+(check-exn #rx"arguments" (λ () (top-interp '{{{x y} => {+ x 1}} 1 2 3})))
+(check-exn #rx"primitive" (λ () (top-interp '(+ 1 2 3))))
+(check-exn #rx"not found" (λ () (top-interp '((+ x y) 1 2 3))))
+(check-exn #rx"non-function" (λ () (top-interp '(3))))
 
-;; Test cases for program parsing and interpretation
-(define test-prog1
-  '{{def {add x} = {+ x 1}}
-    {def {mul x} = {* x 2}}
-    {def {main init} = {add {mul init}}}})
 
-(define test-prog2
-  '{{def {sub x} = {- x 1}}
-    {def {div x} = {/ x 2}}
-    {def {main init} = {sub {div init}}}})
+(check-exn #rx"lookup" (λ () (top-interp '({+ x y} where {[x := 5]}))))
 
-(check-equal? (top-interp test-prog1) 1) ; (add (mul 0)) = (add 0) = 1
-(check-equal? (top-interp test-prog2) -1) ; (sub ((div 0)) = (sub 0) = -1
+;; Test cases for NumC
+(check-equal? (top-interp '42) "42")
 
-;; Test cases for multiple func args
-(define multiple-args-test
-  '((def (main) = (g 2 3 4))
-    (def (g x y z) = (+ (* x y) z))))
+;; Test cases for StrC
+(check-equal? (top-interp "hello") "hello")
 
-(check-equal? (top-interp multiple-args-test) 10)
+;; Test cases for IfC
+(check-equal? (top-interp '(1 if true else 2)) "1")
+(check-equal? (top-interp '(1 if false else 2)) "2")
 
-;; Test cases for conditional expressions
-(define test-prog3
-'{{def {negate x} = {leq0? x then {- 0 x} else {* -1 x}}}
-{def {main init} = {negate {+ init 1}}}})
+;; Test cases for LamC and AppC
+(check-equal? (top-interp '(((x y) => (+ x y)) 2 3)) "5")
+(check-equal? (top-interp '(((x) => (+ x 1)) 4)) "5")
 
-(check-equal? (top-interp test-prog3) -1) ; (negate (+ 0 1)) = (negate 1) = -1
+;; Test cases for IdC
+(check-equal? (top-interp 'true) "true")
+(check-equal? (top-interp 'false) "false")
+;
+;; Test cases for primitive operations
+(check-equal? (top-interp '(+ 2 3)) "5")
+(check-equal? (top-interp '(- 7 3)) "4")
+(check-equal? (top-interp '(* 4 3)) "12")
+(check-equal? (top-interp '(/ 8 2)) "4")
+(check-equal? (top-interp '(<= 2 3)) "true")
+(check-equal? (top-interp '(<= 3 3)) "true")
+(check-equal? (top-interp '(<= 4 3)) "false")
+(check-equal? (top-interp '(equal? "hello" "hello")) "true")
+(check-equal? (top-interp '(equal? "hello" "world")) "false")
 
-;; Test case that reaches the "empty? funs" branch in lookup-fun
-(define test-prog-no-main
-'{{def {add x} = {+ x 1}}
-{def {mul x} = {* x 2}}})
+;; Test cases for where
+(check-equal? (top-interp '((+ x y) where ((x := 2) (y := 3)))) "5")
+(check-equal? (top-interp '((+ x y) where ((x := 4) (y := (* 4 2))))) "12")
 
-(check-exn #rx"VVQS: function not found" (lambda () (top-interp test-prog-no-main)))
 
-;; Test case that reaches the "else (lookup-fun name (cdr funs))" branch in lookup-fun
-(define test-prog-multiple-funs
-'{{def {add x} = {+ x 1}}
-{def {mul x} = {* x 2}}
-{def {main init} = {mul init}}})
+(check-equal? (top-interp '((((f) => ((x y) => (f x y))) ((a b) => (+ a b))) 1 2)) "3")
 
-(check-equal? (top-interp test-prog-multiple-funs) 0) ; (mul 0) = 0
+;; Error cases
+(check-exn exn:fail?
+  (lambda () (top-interp '(+ 2))))
+(check-exn exn:fail?
+  (lambda () (top-interp '(+ 2 3 4))))
+(check-exn exn:fail?
+  (lambda () (top-interp '((x y) => (+ x y 2) 3))))
+(check-exn exn:fail?
+  (lambda () (top-interp '((+ x y) where ((x := 2) (y := 3) (x := 4))))))
 
-;; Test case to reach unbound identifier
-(define test-prog-unbound-id
-'{{def {main init} = unbound-id}})
-
-(check-exn #rx"unbound identifier" (lambda () (top-interp test-prog-unbound-id)))
-
-;; Single interp test cases (no functions)
-(check-equal? (interp a1 '()) 3)
-(check-equal? (interp a2 '()) 6)
-(check-equal? (interp a3 '()) 18)
-(check-equal? (interp sub '()) 1)
-(check-equal? (interp div '()) 2)
-(check-equal? (interp (NumC 0) '()) 0)
-(check-exn #rx"zero" (λ () (interp (BinopC '/ (NumC 5) (NumC 0)) '() )))
-(check-equal? (interp leq0-1 '()) 6)
-(check-equal? (interp leq0-2 '()) 3)
